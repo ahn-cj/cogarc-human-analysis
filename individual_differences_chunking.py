@@ -177,6 +177,9 @@ def main():
     print("[agg] per-(subject, task) feature means")
     per_st = _aggregate_per_subject_task(chunks)
     print(f"       n rows = {len(per_st)}  n subjects = {per_st['subject_id'].nunique()}")
+    per_st.to_csv(os.path.join(args.prior_dir,
+                               "individual_differences_per_subj_task.csv"),
+                  index=False)
 
     features = CHUNK_FEATURES + TRAJ_FEATURES
     print(f"[A] split-half reliability over {args.n_iter} iterations")

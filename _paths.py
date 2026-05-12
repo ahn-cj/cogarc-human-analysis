@@ -19,6 +19,13 @@ DATA_ROOT = PROJECT_ROOT / "data" / "CogARC-dataRepository"
 ARTIFACT_ROOT = PROJECT_ROOT / "prior_analysis"
 TRAINING_DIR = PROJECT_ROOT / "training"
 
+# Sibling repo — raw behavioral data from the MTurk experiment.
+BEHAVIORAL_DATA_DIR = (
+    Path("/Users/carolineahn/Documents/GitHub/CogARC-dataRepository")
+    / "Behavioral data"
+)
+BEHAVIORAL_CSV = BEHAVIORAL_DATA_DIR / "subject_task_sequence_measures_mturk.csv"
+
 
 # Put the repo root on sys.path so bare ``import human_targets`` works
 # under both direct-script and ``python -m`` invocation.
