@@ -1,0 +1,2 @@
+label,x,m,y,n,n_boot,a,b,c,c_prime,indirect,ci_lo,ci_hi,prop_mediated,significant
+RT → chunk_size → accuracy,mean_rt_median,size,accuracy,195,5000,-0.6097,0.0483,-0.3346,-0.3052,-0.0295,-0.1517,0.0831,0.088,False
