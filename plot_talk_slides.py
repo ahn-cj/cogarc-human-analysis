@@ -51,6 +51,13 @@ def _cliffs_delta(x: np.ndarray, y: np.ndarray) -> float:
     return (gt - lt) / (len(x) * len(y))
 
 
+def _tukey_keep_mask(x: np.ndarray, k: float = 1.5) -> np.ndarray:
+    """Return mask of values within Tukey's k×IQR fences."""
+    q1, q3 = np.percentile(x, [25, 75])
+    iqr = q3 - q1
+    return (x >= q1 - k * iqr) & (x <= q3 + k * iqr)
+
+
 def _fmt_p(p: float) -> str:
     return "p<.001" if p < 0.001 else f"p={p:.3f}"
 
@@ -94,8 +101,12 @@ def slide_A(df: pd.DataFrame, out_path: str) -> None:
 
     for ax, (col, label, scale) in zip(axes, measures):
         vals = df[col].dropna()
-        x_top  = vals[top.loc[vals.index]].values / scale
-        x_rest = vals[rest.loc[vals.index]].values / scale
+        x_top_raw  = vals[top.loc[vals.index]].values / scale
+        x_rest_raw = vals[rest.loc[vals.index]].values / scale
+
+        # Drop Tukey outliers within each group for plotting + stats
+        x_top  = x_top_raw[_tukey_keep_mask(x_top_raw)]
+        x_rest = x_rest_raw[_tukey_keep_mask(x_rest_raw)]
 
         med_top  = np.median(x_top)
         med_rest = np.median(x_rest)
@@ -171,6 +182,11 @@ def slide_A(df: pd.DataFrame, out_path: str) -> None:
 
 def slide_B(df: pd.DataFrame, out_path: str) -> None:
     sub = df[["size", "mean_rt_median", "top_solver"]].dropna()
+
+    # Drop bivariate Tukey outliers (either axis out of fences)
+    keep = _tukey_keep_mask(sub["size"].values) & _tukey_keep_mask(sub["mean_rt_median"].values)
+    sub  = sub[keep].copy()
+
     top  = sub["top_solver"].astype(bool)
     rest = ~top
 
