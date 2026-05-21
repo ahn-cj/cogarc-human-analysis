@@ -1,0 +1,9 @@
+model,factor,indicator,loading,std_loading,se,p
+one_factor,Efficiency,pacing_deliberation,1.0,0.7331112172150841,-,-
+one_factor,Efficiency,pacing_inter_edit_rt,1.1461293118258808,0.8402859582784935,0.11999931567868753,0.0
+one_factor,Efficiency,granularity_size,0.977037855921799,0.7163318521409767,0.10968200142722782,0.0
+one_factor,Efficiency,granularity_n_chunks,0.7217247155667734,0.5291029751649565,0.107922029578671,2.2707169478053402e-11
+two_factor,Pacing,pacing_deliberation,1.0,0.7256197533150779,-,-
+two_factor,Pacing,pacing_inter_edit_rt,1.2079109982735206,0.8764289917987194,0.13409642052399764,0.0
+two_factor,Granularity,granularity_size,1.0,0.8177834924226325,-,-
+two_factor,Granularity,granularity_n_chunks,0.6921197598205988,0.5660219630187742,0.10606718275889705,6.786748940612597e-11

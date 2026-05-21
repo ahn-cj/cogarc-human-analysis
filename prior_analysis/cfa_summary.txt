@@ -1,0 +1,32 @@
+CFA: one-factor vs two-factor model of pacing + chunking style
+================================================================
+
+Sample:         n = 195 subjects from the cross-repo merged dataset
+Indicators (all rank-z transformed; sign-aligned so higher = more
+                                       efficient / more global):
+  Pacing:       deliberation_time, inter-edit RT
+  Granularity:  chunk size, n chunks per trajectory (sign-flipped)
+(time-before-first-edit and n_cells dropped due to redundancy with
+ deliberation_time (r = .86) and chunk size (r = .98) respectively;
+ their inclusion produced Heywood cases in a preliminary 6-indicator run.)
+
+Model 1 (one factor):  Efficiency → all four indicators
+Model 2 (two factors): Pacing → 2 timing,  Granularity → 2 chunking,
+                       Pacing ↔ Granularity correlation free.
+
+Fit indices
+-----------
+                 chi2    df   p     CFI    TLI    RMSEA  SRMR    AIC      BIC
+  one-factor      11.61    2  0.003  0.961  0.884  0.157  nan     15.88     42.06
+  two-factor       5.30    1  0.021  0.983  0.897  0.149  nan     17.95     47.40
+
+Comparison
+----------
+  Δχ²        = +6.309  (Δdf = 1,  p = 0.0120)
+  ΔAIC       = -2.065   (positive ⇒ two-factor preferred)
+  ΔBIC       = -5.338   (positive ⇒ two-factor preferred; BIC penalises complexity more)
+  r(Pacing, Granularity)  = +0.837
+
+Verdict
+-------
+The two-factor model fits significantly better than the one-factor model (Δχ² = 6.31, df = 1, p = 0.012; ΔCFI = +0.021), so a strict single-factor interpretation is not supported by the χ² test. However, BIC favours the more parsimonious one-factor model (ΔBIC = -5.34; negative values favour one-factor), and the inter-factor correlation in the two-factor model is r = +0.84 — meaning the two factors share approximately 70% of their variance. The CFA therefore supports a nuanced 'two correlated facets' reading rather than either a strict single dimension or two independent constructs: pacing and chunking style are statistically distinguishable but tightly coupled, consistent with a higher-order common efficiency construct that surfaces in both.
