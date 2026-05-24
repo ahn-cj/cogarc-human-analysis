@@ -1,0 +1,34 @@
+Practice-curve fits: power law vs exponential
+============================================================
+
+Sample: 218 subjects, ≥30-trial fit threshold.
+
+--- inter-edit RT (s) ---
+  Per-subject (n = 204):
+    exponential wins: 117 (57%)
+    power-law wins:   87 (43%)
+    median ΔAIC (pl − exp) = +0.08
+
+  Group-aggregated mean per trial-order:
+    power-law   b = -0.1807  R²(log) = 0.137
+    exponential b = -0.0090  R²(log) = 0.195
+    winner: exponential
+
+  Individual learning rate (exponential β) × outcomes:
+    Spearman(β, accuracy) = +0.236, p = 0.0007
+    Top vs rest median β: -0.0039 vs -0.0074, p = 0.0044
+
+--- deliberation time (s) ---
+  Per-subject (n = 181):
+    exponential wins: 93 (51%)
+    power-law wins:   88 (49%)
+    median ΔAIC (pl − exp) = +0.01
+
+  Group-aggregated mean per trial-order:
+    power-law   b = -0.0859  R²(log) = 0.627
+    exponential b = -0.0038  R²(log) = 0.680
+    winner: exponential
+
+  Individual learning rate (exponential β) × outcomes:
+    Spearman(β, accuracy) = +0.165, p = 0.0267
+    Top vs rest median β: -0.0032 vs -0.0043, p = 0.0809
