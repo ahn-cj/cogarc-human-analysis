@@ -23,6 +23,9 @@ import matplotlib.pyplot as plt
 
 
 FEATURE_ORDER = [
+    # Pacing first (visually grouped at the top of the figure)
+    "deliberation_time", "mean_rt_between_edits",
+    # Chunking
     "size", "n_cells", "n_chunks_total",
     "is_connected", "fill_ratio",
     "color_homogeneity",
@@ -30,19 +33,24 @@ FEATURE_ORDER = [
 ]
 
 FEATURE_LABELS = {
-    "size":              "chunk size",
-    "n_cells":           "unique cells per chunk",
-    "n_chunks_total":    "n chunks per trajectory",
-    "is_connected":      "frac 4-connected chunks",
-    "fill_ratio":        "fill ratio (compactness)",
-    "color_homogeneity": "color homogeneity",
-    "bbox_area":         "bbox area",
-    "nn_chain_rate":     "draw-order adjacency",
-    "success_iou_best":  "success-IoU per chunk",
+    "deliberation_time":     "deliberation time",
+    "mean_rt_between_edits": "inter-edit RT",
+    "size":                  "chunk size",
+    "n_cells":               "unique cells per chunk",
+    "n_chunks_total":        "n chunks per trajectory",
+    "is_connected":          "frac 4-connected chunks",
+    "fill_ratio":            "fill ratio (compactness)",
+    "color_homogeneity":     "color homogeneity",
+    "bbox_area":             "bbox area",
+    "nn_chain_rate":         "draw-order adjacency",
+    "success_iou_best":      "success-IoU per chunk",
 }
 
-# Reliable features (split-half ρ > 0.2) get highlighted
-RELIABLE = {"size", "n_cells", "n_chunks_total", "is_connected", "fill_ratio"}
+# Reliable features (split-half ρ > 0.2) get highlighted; pacing measures
+# are stable individual traits per §3.2 so they belong here too.
+RELIABLE = {"deliberation_time", "mean_rt_between_edits",
+            "size", "n_cells", "n_chunks_total",
+            "is_connected", "fill_ratio"}
 
 
 def _sig_marker(p: float) -> str:
@@ -61,10 +69,38 @@ def main():
                     default="prior_analysis/controls_comparison_figure.png")
     args = ap.parse_args()
 
-    raw = pd.read_csv(os.path.join(args.prior_dir,
-                                    "chunking_top_solvers_stats.csv"))
+    raw_chunk = pd.read_csv(os.path.join(args.prior_dir,
+                                          "chunking_top_solvers_stats.csv"))
     ctrl = pd.read_csv(os.path.join(args.prior_dir,
                                      "controlled_top_solver_stats.csv"))
+
+    # Compute raw Cliff's δ for pacing measures on the fly
+    merged = pd.read_csv(os.path.join(args.prior_dir,
+                                       "chunking_top_solvers_merged.csv"))
+    top_mask  = merged["top_solver"].astype(bool)
+    rest_mask = ~top_mask
+    raw_pacing_rows = []
+    pacing_pairs = [
+        ("deliberation_time",     "deliberation_time_median"),
+        ("mean_rt_between_edits", "mean_rt_median"),
+    ]
+    from scipy.stats import mannwhitneyu
+    for feat_key, col in pacing_pairs:
+        if col not in merged.columns:
+            continue
+        top  = merged.loc[top_mask, col].dropna().values
+        rest = merged.loc[rest_mask, col].dropna().values
+        if len(top) < 5 or len(rest) < 5:
+            continue
+        # Cliff's δ
+        gt = int(np.sum(np.subtract.outer(top, rest) > 0))
+        lt = int(np.sum(np.subtract.outer(top, rest) < 0))
+        delta = (gt - lt) / (len(top) * len(rest))
+        _, p = mannwhitneyu(top, rest, alternative="two-sided")
+        raw_pacing_rows.append({"feature": feat_key,
+                                 "cliffs_delta": float(delta),
+                                 "p_mannwhitney": float(p)})
+    raw = pd.concat([raw_chunk, pd.DataFrame(raw_pacing_rows)], ignore_index=True)
 
     raw_idx  = raw.set_index("feature")
     ctrl_idx = ctrl.set_index("feature")
@@ -124,8 +160,9 @@ def main():
     ax.set_xlim(-0.55, 0.55)
     ax.invert_yaxis()  # most-affected feature at top
     ax.set_title(
-        "Top-solver chunking effects survive controls for task difficulty and trajectory length\n"
-        "(bold feature names = split-half ρ > 0.2;   ***p<.001  **p<.01  *p<.05)",
+        "Top-solver pacing and chunking effects survive regression controls\n"
+        "(pacing: + n_examples covariate; deliberation_time: + example-view-time covariate)\n"
+        "(***p<.001  **p<.01  *p<.05)",
         loc="left", fontsize=11.5,
     )
     ax.legend(loc="lower right", fontsize=9.5)

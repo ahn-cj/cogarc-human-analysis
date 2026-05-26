@@ -1,37 +1,43 @@
 """
-Regression controls for task difficulty and trajectory length.
+Regression controls for task difficulty, trajectory length, and number of
+examples — applied to BOTH chunking and pacing measures.
 
-For each chunk feature, we fit a per-trial regression
+For each per-(subject, task) measure, we fit a per-trial OLS regression with
+covariates tailored to the measure's confounds, take residuals, and average
+or median them per subject to obtain a *controlled* per-subject profile.
+All §3 (top-solver vs rest) and §4 (joint rank regression) analyses are
+then re-run on the controlled profile.
 
-    feature_value  ~  task_difficulty  +  log(trajectory_length)
+Covariate sets
+--------------
+Chunking measures (size, n_cells, n_chunks_total, is_connected, fill_ratio,
+                   color_homogeneity, bbox_area, nn_chain_rate, success_iou_best):
+    feature  ~  task_difficulty  +  log(trajectory_length)
 
-at the (subject, task) level, take the residuals, and average them per
-subject to obtain a *controlled* per-subject chunking profile.  All
-downstream §3 and §4 analyses are then re-run on this controlled profile
-so we can see whether the chunking-style effects survive after accounting
-for the difficulty of the tasks each person attempted and the length of
-their solution.
+Inter-edit RT (mean_rt_between_edits):
+    feature  ~  task_difficulty  +  log(trajectory_length)  +  n_examples
+
+Deliberation time (deliberation_time):
+    feature  ~  task_difficulty  +  log(trajectory_length)  +  n_examples
+                                 +  example_view_time_before_first_edit
+
+The example-view-time covariate for deliberation time isolates the
+"planning-after-examples" component of deliberation_time — i.e. it asks
+whether top solvers plan faster *once we control for how long they look at
+the examples* (cf. §3.2.3).
+
+Per-subject aggregation matches the chapter's existing measures:
+    Chunking residuals → mean per subject  (matches per-subject chunk profile)
+    Pacing residuals   → median per subject (matches deliberation_time_median,
+                                              mean_rt_median in the merged CSV)
 
 Outputs (prior_analysis/):
-    controlled_per_subj_task.csv      one row per (subject, task) with raw
-                                       and residualised feature values
-    controlled_subject_profile.csv    one row per subject, residual means
-    controlled_top_solver_stats.csv   §3 top-vs-rest on controlled profile
-    controlled_section4_regression.csv §4 joint rank regression on controlled
-                                       profile
-    controls_regression_diagnostics.csv  per-feature R² of the control model
-
-Justification of choices:
-    * Per-trial regression (not per-task) so we use the full 14k cells of
-      information rather than 75 task-mean rows.
-    * log(trajectory_length) because trajectory length is heavily
-      right-skewed (median 27 edits, max ~2500); the log gives a roughly
-      symmetric covariate without throwing away the tail.
-    * OLS on raw feature values (not ranks) for the residualisation step —
-      we want the residual to live in the same units as the original
-      feature so the per-subject mean is interpretable.  Downstream
-      inferential tests on the residuals remain rank-based (Spearman ρ,
-      Mann–Whitney, Cliff's δ, rank regression).
+    controlled_per_subj_task.csv          per-trial raw + residuals (all measures)
+    controlled_subject_profile.csv        per-subject residual aggregates
+    controlled_top_solver_stats.csv       §3 top-vs-rest on controlled measures
+    controlled_section4_regression.csv    §4 joint rank regression
+                                          (controlled size + controlled RT)
+    controls_regression_diagnostics.csv   per-feature R² of each control model
 """
 
 from __future__ import annotations
@@ -39,7 +45,7 @@ from __future__ import annotations
 import _paths  # noqa: F401
 import argparse
 import os
-from typing import List
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -47,17 +53,31 @@ import statsmodels.api as sm
 from scipy.stats import rankdata, mannwhitneyu
 
 
-# ── feature lists ─────────────────────────────────────────────────────────────
+# ── feature lists and covariate sets ─────────────────────────────────────────
 
-# Per-chunk features — averaged across chunks within each (subject, task) cell
 CHUNK_LEVEL_FEATURES = [
     "size", "n_cells", "is_connected", "fill_ratio",
     "color_homogeneity", "bbox_area", "nn_chain_rate", "success_iou_best",
 ]
-# Per-trajectory features — one value per (subject, task) cell already
-TRAJ_LEVEL_FEATURES = ["n_chunks_total"]
+TRAJ_LEVEL_FEATURES  = ["n_chunks_total"]
+PACING_FEATURES      = ["mean_rt_between_edits", "deliberation_time"]
 
-ALL_FEATURES = CHUNK_LEVEL_FEATURES + TRAJ_LEVEL_FEATURES
+CHUNKING_FEATURES = CHUNK_LEVEL_FEATURES + TRAJ_LEVEL_FEATURES
+ALL_FEATURES      = CHUNKING_FEATURES + PACING_FEATURES
+
+# Per-measure covariate sets
+COMMON_COVARIATES = ["task_difficulty", "log_traj_len"]
+COVARIATE_SETS: Dict[str, List[str]] = {
+    f: COMMON_COVARIATES.copy() for f in CHUNKING_FEATURES
+}
+COVARIATE_SETS["mean_rt_between_edits"] = COMMON_COVARIATES + ["n_examples"]
+COVARIATE_SETS["deliberation_time"]     = (
+    COMMON_COVARIATES + ["n_examples", "example_view_time_before_first_edit"]
+)
+
+# Aggregation rule for residuals (mean for chunking, median for pacing)
+AGG_RULE = {f: "mean" for f in CHUNKING_FEATURES}
+AGG_RULE.update({f: "median" for f in PACING_FEATURES})
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -76,93 +96,90 @@ def _cliffs_delta(x: np.ndarray, y: np.ndarray) -> float:
     return (gt - lt) / (len(x) * len(y))
 
 
-def _aggregate_per_subject_task(chunks: pd.DataFrame) -> pd.DataFrame:
-    """Per-(subject, task) means of chunk features + trajectory length."""
+def _build_per_st_table(prior_dir: str, behavioral_csv: str) -> pd.DataFrame:
+    """One row per (subject, task) cell with chunking aggregates,
+    per-trial pacing measures, trajectory length, and task covariates."""
+    chunks = pd.read_csv(os.path.join(prior_dir, "chunks_per_trajectory.csv"))
     agg = {f: "mean" for f in CHUNK_LEVEL_FEATURES}
-    agg["n_chunks_total"] = "first"        # already per-trajectory
-    agg["size"]           = ["mean", "sum"]  # capture both mean size and total edits
+    agg["n_chunks_total"] = "first"
+    agg["size"] = ["mean", "sum"]
     per_st = chunks.groupby(["subject_id", "task_id"]).agg(agg)
-    # Flatten MultiIndex from the size dual-agg
     per_st.columns = [
         "size" if c == ("size", "mean")
         else "trajectory_length" if c == ("size", "sum")
         else c[0] if isinstance(c, tuple) else c
         for c in per_st.columns
     ]
-    return per_st.reset_index()
+    per_st = per_st.reset_index().rename(columns={"subject_id": "subject"})
 
+    # Merge per-trial pacing + example_view_time
+    behav = pd.read_csv(behavioral_csv)
+    behav = behav.rename(columns={"trial": "task_id"})
+    keep_cols = ["subject", "task_id",
+                 "mean_rt_between_edits", "deliberation_time",
+                 "example_view_time_before_first_edit"]
+    per_st = per_st.merge(behav[keep_cols], on=["subject", "task_id"], how="left")
 
-def _attach_difficulty(per_st: pd.DataFrame, trial_scores_path: str) -> pd.DataFrame:
-    ts = pd.read_csv(trial_scores_path)
+    # Attach task-level covariates
+    ts = pd.read_csv(os.path.join("/Users/carolineahn/Documents/GitHub/"
+                                   "CogARC-dataRepository/Behavioral data/",
+                                   "trial_scores.csv"))
     ts["task_id"] = ts["trial"].str.replace(".json", "", regex=False)
-    ts = ts.rename(columns={"attempt_score": "task_difficulty"})[["task_id", "task_difficulty"]]
-    merged = per_st.merge(ts, on="task_id", how="left")
-    n_missing = merged["task_difficulty"].isna().sum()
-    if n_missing:
-        print(f"[warn] {n_missing}/{len(merged)} rows missing difficulty score")
-    return merged
+    ts = ts.rename(columns={"attempt_score": "task_difficulty"})
+    per_st = per_st.merge(ts[["task_id", "task_difficulty"]],
+                           on="task_id", how="left")
 
+    ne = pd.read_csv(os.path.join(prior_dir, "task_n_examples.csv"))
+    per_st = per_st.merge(ne[["task_id", "n_examples"]],
+                           on="task_id", how="left")
 
-def _residualise(per_st: pd.DataFrame, features: List[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Regress each feature on difficulty + log(trajectory_length); store residuals.
-
-    Returns
-    -------
-    per_st_resid : DataFrame
-        Adds `{feature}_resid` columns for every feature.
-    diagnostics : DataFrame
-        Per-feature R², regression coefficients, n.
-    """
-    per_st = per_st.copy()
+    # Derived covariate
     per_st["log_traj_len"] = np.log(per_st["trajectory_length"].clip(lower=1))
+    return per_st
 
-    diag_rows = []
-    for feat in features:
-        df = per_st[[feat, "task_difficulty", "log_traj_len"]].dropna()
-        X = sm.add_constant(df[["task_difficulty", "log_traj_len"]])
+
+def _residualise(per_st: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    out = per_st.copy()
+    rows = []
+    for feat, covars in COVARIATE_SETS.items():
+        cols_needed = [feat] + covars
+        df = per_st[cols_needed].dropna()
+        if len(df) < 30:
+            print(f"  [skip] {feat}: only {len(df)} valid rows")
+            continue
+        X = sm.add_constant(df[covars])
         res = sm.OLS(df[feat], X).fit()
 
-        # residuals (NaN for rows with missing covariates)
-        full_X = sm.add_constant(per_st[["task_difficulty", "log_traj_len"]],
-                                  has_constant="add")
-        # Use predict to handle the full set, including NaN propagation
-        pred = res.predict(full_X)
-        per_st[f"{feat}_resid"] = per_st[feat] - pred
+        # Compute residuals for the full table (NaN-safe)
+        full_X = sm.add_constant(per_st[covars], has_constant="add")
+        pred   = res.predict(full_X)
+        out[f"{feat}_resid"] = per_st[feat] - pred
 
-        diag_rows.append({
-            "feature": feat,
-            "n": int(res.nobs),
-            "R2": float(res.rsquared),
-            "beta_difficulty": float(res.params["task_difficulty"]),
-            "p_difficulty": float(res.pvalues["task_difficulty"]),
-            "beta_log_traj_len": float(res.params["log_traj_len"]),
-            "p_log_traj_len": float(res.pvalues["log_traj_len"]),
-        })
-
-    return per_st, pd.DataFrame(diag_rows)
+        row = dict(feature=feat, n=int(res.nobs), R2=float(res.rsquared))
+        # Capture each coefficient + p
+        for c in covars:
+            row[f"beta_{c}"] = float(res.params[c])
+            row[f"p_{c}"]    = float(res.pvalues[c])
+        rows.append(row)
+    return out, pd.DataFrame(rows)
 
 
-def _per_subject_residual_profile(per_st_resid: pd.DataFrame,
-                                  features: List[str]) -> pd.DataFrame:
-    """Mean of residuals per subject — the controlled per-subject profile."""
-    resid_cols = [f"{f}_resid" for f in features]
-    profile = (per_st_resid.groupby("subject_id")[resid_cols]
-                          .mean().reset_index())
-    profile = profile.rename(columns={"subject_id": "subject"})
+def _per_subject_profile(per_st_resid: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate residuals per subject — mean for chunking, median for pacing."""
+    cols = {f"{f}_resid": AGG_RULE[f]
+            for f in ALL_FEATURES if f"{f}_resid" in per_st_resid.columns}
+    profile = (per_st_resid.groupby("subject")
+                            .agg(cols)
+                            .reset_index())
     return profile
 
 
-# ── §3: top-solver comparison on controlled features ─────────────────────────
-
-def _top_solver_comparison_controlled(profile: pd.DataFrame,
-                                      behavioral_csv: str,
-                                      features: List[str]) -> pd.DataFrame:
-    """Mann-Whitney + Cliff's δ for top vs rest on each controlled feature."""
+def _top_solver_comparison(profile: pd.DataFrame,
+                            behavioral_csv: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     behav = pd.read_csv(behavioral_csv)
-    behav["correct"] = behav["final_outcome"].str.lower() == "success"
+    behav["correct"] = behav["final_outcome"].astype(str).str.lower() == "success"
     subj = (behav.groupby("subject")
-                  .agg(n_tasks=("trial", "nunique"),
-                       accuracy=("correct", "mean"))
+                  .agg(n_tasks=("trial","nunique"), accuracy=("correct","mean"))
                   .reset_index())
     subj = subj[subj["n_tasks"] >= 40]
     subj["top_solver"] = subj["accuracy"] >= 0.95
@@ -173,16 +190,17 @@ def _top_solver_comparison_controlled(profile: pd.DataFrame,
     rows = []
     top_mask  = merged["top_solver"].astype(bool)
     rest_mask = ~top_mask
-    for f in features:
+    for f in ALL_FEATURES:
         col = f"{f}_resid"
+        if col not in merged.columns:
+            continue
         top  = merged.loc[top_mask, col].dropna().values
         rest = merged.loc[rest_mask, col].dropna().values
         if len(top) < 5 or len(rest) < 5:
             continue
         _, p = mannwhitneyu(top, rest, alternative="two-sided")
         rows.append({
-            "feature": f,
-            "n_top": len(top), "n_rest": len(rest),
+            "feature": f, "n_top": len(top), "n_rest": len(rest),
             "top_median":  float(np.median(top)),
             "rest_median": float(np.median(rest)),
             "median_diff": float(np.median(top) - np.median(rest)),
@@ -193,29 +211,19 @@ def _top_solver_comparison_controlled(profile: pd.DataFrame,
     return out, merged
 
 
-# ── §4: joint rank regression on controlled chunk size ───────────────────────
-
-def _joint_rank_regression_controlled(merged: pd.DataFrame,
-                                       size_col: str = "size_resid") -> pd.DataFrame:
-    """Replicate the Section 4 rank regression using the controlled size."""
-    behav_csv = str(_paths.BEHAVIORAL_CSV)
-    behav = pd.read_csv(behav_csv)
-    behav["correct"] = behav["final_outcome"].str.lower() == "success"
-    subj = (behav.groupby("subject")
-                  .agg(mean_rt_median=("mean_rt_between_edits", "median"))
-                  .reset_index())
-
-    df = merged.merge(subj, on="subject", how="inner")
-    ok = df[[size_col, "mean_rt_median", "accuracy"]].notna().all(axis=1)
-    sub = df[ok].copy()
+def _joint_rank_regression(merged: pd.DataFrame) -> pd.DataFrame:
+    """rank(accuracy) ~ rank(controlled size) + rank(controlled RT)."""
+    cols = ["size_resid", "mean_rt_between_edits_resid", "accuracy"]
+    ok = merged[cols].notna().all(axis=1)
+    sub = merged[ok].copy()
     n = len(sub)
 
-    sz = _rank(sub[size_col].values)
-    rt = _rank(sub["mean_rt_median"].values)
+    sz = _rank(sub["size_resid"].values)
+    rt = _rank(sub["mean_rt_between_edits_resid"].values)
     y  = _rank(sub["accuracy"].values)
 
-    def _fit(X_cols):
-        X = sm.add_constant(np.column_stack(X_cols) if len(X_cols) > 1 else X_cols[0])
+    def _fit(cols_X):
+        X = sm.add_constant(np.column_stack(cols_X) if len(cols_X) > 1 else cols_X[0])
         return sm.OLS(y, X).fit()
 
     m1 = _fit([sz])
@@ -223,24 +231,21 @@ def _joint_rank_regression_controlled(merged: pd.DataFrame,
     m3 = _fit([sz, rt])
 
     rows = [
-        {"model": "size_only_ctrl", "R2": m1.rsquared,
+        {"model": "size_ctrl_only",   "R2": m1.rsquared,
          "beta_size": m1.params[1], "p_size": m1.pvalues[1],
          "beta_rt": np.nan, "p_rt": np.nan, "n": n},
-        {"model": "rt_only", "R2": m2.rsquared,
+        {"model": "rt_ctrl_only",     "R2": m2.rsquared,
          "beta_size": np.nan, "p_size": np.nan,
          "beta_rt": m2.params[1], "p_rt": m2.pvalues[1], "n": n},
-        {"model": "joint_ctrl", "R2": m3.rsquared,
+        {"model": "joint_both_ctrl", "R2": m3.rsquared,
          "beta_size": m3.params[1], "p_size": m3.pvalues[1],
          "beta_rt": m3.params[2], "p_rt": m3.pvalues[2], "n": n},
         {"model": "unique_size_ctrl", "R2": m3.rsquared - m2.rsquared,
-         "beta_size": np.nan, "p_size": np.nan,
-         "beta_rt": np.nan, "p_rt": np.nan, "n": n},
-        {"model": "unique_rt", "R2": m3.rsquared - m1.rsquared,
-         "beta_size": np.nan, "p_size": np.nan,
-         "beta_rt": np.nan, "p_rt": np.nan, "n": n},
-        {"model": "shared", "R2": m1.rsquared + m2.rsquared - m3.rsquared,
-         "beta_size": np.nan, "p_size": np.nan,
-         "beta_rt": np.nan, "p_rt": np.nan, "n": n},
+         "beta_size": np.nan, "p_size": np.nan, "beta_rt": np.nan, "p_rt": np.nan, "n": n},
+        {"model": "unique_rt_ctrl",   "R2": m3.rsquared - m1.rsquared,
+         "beta_size": np.nan, "p_size": np.nan, "beta_rt": np.nan, "p_rt": np.nan, "n": n},
+        {"model": "shared",           "R2": m1.rsquared + m2.rsquared - m3.rsquared,
+         "beta_size": np.nan, "p_size": np.nan, "beta_rt": np.nan, "p_rt": np.nan, "n": n},
     ]
     return pd.DataFrame(rows)
 
@@ -250,48 +255,35 @@ def _joint_rank_regression_controlled(merged: pd.DataFrame,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prior_dir", default="prior_analysis")
-    ap.add_argument("--trial_scores",
-                    default=str(_paths.BEHAVIORAL_DATA_DIR / "trial_scores.csv"))
-    ap.add_argument("--behavioral_csv",
-                    default=str(_paths.BEHAVIORAL_CSV))
+    ap.add_argument("--behavioral_csv", default=str(_paths.BEHAVIORAL_CSV))
     args = ap.parse_args()
 
-    # ── Load + aggregate per (subject, task) ──────────────────────────────────
-    print("[load] chunks_per_trajectory.csv")
-    chunks = pd.read_csv(os.path.join(args.prior_dir, "chunks_per_trajectory.csv"))
-    print(f"       {len(chunks):,} chunks")
+    print("[load + merge] building per-(subject, task) table")
+    per_st = _build_per_st_table(args.prior_dir, args.behavioral_csv)
+    print(f"  {len(per_st):,} (subject, task) cells, "
+          f"{per_st['subject'].nunique()} subjects")
 
-    per_st = _aggregate_per_subject_task(chunks)
-    print(f"[agg ] {len(per_st):,} (subject, task) cells")
-
-    # ── Attach difficulty + residualise ───────────────────────────────────────
-    per_st = _attach_difficulty(per_st, args.trial_scores)
-
-    print("\n[fit ] regressing each feature on difficulty + log(trajectory_length)")
-    per_st_resid, diag = _residualise(per_st, ALL_FEATURES)
+    print("\n[fit] residualising each feature on its covariate set")
+    per_st_resid, diag = _residualise(per_st)
     print(diag.round(4).to_string(index=False))
     diag.to_csv(os.path.join(args.prior_dir,
                               "controls_regression_diagnostics.csv"), index=False)
     per_st_resid.to_csv(os.path.join(args.prior_dir,
                                       "controlled_per_subj_task.csv"), index=False)
 
-    # ── Build controlled per-subject profile ──────────────────────────────────
-    profile = _per_subject_residual_profile(per_st_resid, ALL_FEATURES)
+    profile = _per_subject_profile(per_st_resid)
     profile.to_csv(os.path.join(args.prior_dir,
                                  "controlled_subject_profile.csv"), index=False)
     print(f"\n[prof] {len(profile)} subjects in controlled profile")
 
-    # ── §3 top-solver comparison on controlled features ───────────────────────
-    print("\n[B] top-solver comparison on CONTROLLED features (Mann-Whitney, Cliff's δ)")
-    ts_stats, merged = _top_solver_comparison_controlled(
-        profile, args.behavioral_csv, ALL_FEATURES)
+    print("\n[§3] top-solver comparison on CONTROLLED features")
+    ts_stats, merged = _top_solver_comparison(profile, args.behavioral_csv)
     print(ts_stats.to_string(index=False))
     ts_stats.to_csv(os.path.join(args.prior_dir,
                                   "controlled_top_solver_stats.csv"), index=False)
 
-    # ── §4 joint rank regression on controlled chunk size ─────────────────────
-    print("\n[C] joint rank regression on CONTROLLED chunk size + RT")
-    joint = _joint_rank_regression_controlled(merged, size_col="size_resid")
+    print("\n[§4] joint rank regression: BOTH measures controlled")
+    joint = _joint_rank_regression(merged)
     print(joint.round(4).to_string(index=False))
     joint.to_csv(os.path.join(args.prior_dir,
                                "controlled_section4_regression.csv"), index=False)
