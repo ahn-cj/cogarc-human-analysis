@@ -80,9 +80,9 @@ def main():
         "count": g_per_order["count"],
     })
 
-    fig = plt.figure(figsize=(17, 5.4))
-    gs  = GridSpec(1, 3, figure=fig, width_ratios=[1.15, 1.0, 1.0],
-                   wspace=0.34, left=0.06, right=0.97, top=0.86, bottom=0.14)
+    fig = plt.figure(figsize=(13, 5.4))
+    gs  = GridSpec(1, 2, figure=fig, width_ratios=[1.1, 1.0],
+                   wspace=0.30, left=0.07, right=0.97, top=0.86, bottom=0.14)
 
     # ── Panel A: group mean RT + both fits ────────────────────────────────────
     axA = fig.add_subplot(gs[0, 0])
@@ -120,34 +120,8 @@ def main():
     axA.legend(fontsize=9, loc="upper right")
     axA.grid(alpha=0.25)
 
-    # ── Panel B: model winner stacked bar + per-subject exp β histogram ──────
-    axB = fig.add_subplot(gs[0, 1])
-
-    n_fit  = int(rt_win["n_subjects_fit"])
-    n_exp  = int(rt_win["n_exp_wins"])
-    n_pl   = int(rt_win["n_pl_wins"])
-    pct_exp = n_exp / n_fit
-
-    # Inset stacked-bar at top of panel
-    axB.barh([0], [n_pl],            height=0.4, color=COLOR_PL,
-             alpha=0.85, label=f"power law wins ({n_pl}/{n_fit}, {1-pct_exp:.0%})")
-    axB.barh([0], [n_exp], left=[n_pl], height=0.4, color=COLOR_EXP,
-             alpha=0.85, label=f"exponential wins ({n_exp}/{n_fit}, {pct_exp:.0%})")
-    axB.text(n_pl + n_exp + 4, 0,
-             f"  median ΔAIC = {rt_win['median_delta_aic_pl_minus_exp']:+.2f}\n"
-             f"  (positive ⇒ exponential preferred)",
-             va="center", ha="left", fontsize=9, color="#555555", style="italic")
-    axB.set_yticks([])
-    axB.set_xlim(0, n_fit + 80)
-    axB.set_xlabel(f"subjects (n = {n_fit} with ≥ 30 valid trials)", fontsize=9.5)
-    axB.set_title("B. Which model fits per-subject data better?",
-                  loc="left", fontsize=12, fontweight="bold")
-    axB.legend(fontsize=8.5, loc="upper right")
-    for spine in ("top", "right", "left"):
-        axB.spines[spine].set_visible(False)
-
-    # ── Panel C: per-subject exp β vs accuracy, coloured by top solver ────────
-    axC = fig.add_subplot(gs[0, 2])
+    # ── Panel B: per-subject exp β vs accuracy, coloured by top solver ────────
+    axC = fig.add_subplot(gs[0, 1])
     rest_mask = ~rt_sub["top_solver"].astype(bool)
     top_mask  =  rt_sub["top_solver"].astype(bool)
 
@@ -171,7 +145,7 @@ def main():
 
     axC.set_xlabel("Overall accuracy", fontsize=10)
     axC.set_ylabel("Per-subject exponential β\n(more negative = faster speedup)", fontsize=10)
-    axC.set_title("C. Top solvers have flatter learning curves\n(consistent with Ackerman 1988)",
+    axC.set_title("B. Top solvers have flatter learning curves\n(consistent with Ackerman 1988)",
                   loc="left", fontsize=11.5, fontweight="bold")
     axC.legend(fontsize=9, loc="upper right")
     axC.grid(alpha=0.25)
