@@ -66,6 +66,26 @@ MIN_TASKS = 40
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+def _spearman_with_ci(x: np.ndarray, y: np.ndarray,
+                      n_boot: int = 5000, seed: int = 42) -> dict:
+    """Spearman rho with a percentile bootstrap 95% CI on rho."""
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    n = len(x)
+    if n < 10:
+        return dict(n=int(n), rho=float("nan"), p_value=float("nan"),
+                    ci_lo=float("nan"), ci_hi=float("nan"))
+    rho, p = spearmanr(x, y)
+    rng = np.random.default_rng(seed)
+    boot = np.empty(n_boot)
+    for i in range(n_boot):
+        idx = rng.integers(0, n, n)
+        boot[i], _ = spearmanr(x[idx], y[idx])
+    ci_lo, ci_hi = np.nanpercentile(boot, [2.5, 97.5])
+    return dict(n=int(n), rho=float(rho), p_value=float(p),
+                ci_lo=float(ci_lo), ci_hi=float(ci_hi))
+
+
 def _cliffs_delta(x: np.ndarray, y: np.ndarray) -> float:
     x = x[np.isfinite(x)]
     y = y[np.isfinite(y)]
@@ -166,6 +186,27 @@ def _chunk_timing_correlations(merged: pd.DataFrame,
     return pd.DataFrame(rows)
 
 
+# ── analysis A2: feature × accuracy (continuous) ──────────────────────────────
+
+def _accuracy_correlations(merged: pd.DataFrame,
+                           feats: list[str],
+                           outcome: str = "accuracy") -> pd.DataFrame:
+    """Spearman ρ (with bootstrap CI) between each feature and continuous accuracy.
+
+    This is the continuous counterpart to the top-solver dichotomy: it treats
+    performance as the graded variable it is, rather than splitting subjects at
+    an arbitrary accuracy threshold.
+    """
+    rows = []
+    y = merged[outcome].values
+    for f in feats:
+        res = _spearman_with_ci(merged[f].values, y)
+        res["feature"] = f
+        rows.append(res)
+    df = pd.DataFrame(rows)[["feature", "n", "rho", "ci_lo", "ci_hi", "p_value"]]
+    return df.sort_values("rho", key=np.abs, ascending=False).reset_index(drop=True)
+
+
 # ── analysis B: top-solver vs rest ────────────────────────────────────────────
 
 def _top_solver_comparisons(merged: pd.DataFrame,
@@ -250,6 +291,15 @@ def main():
     timing_corr.to_csv(os.path.join(args.prior_dir,
                                     "chunking_timing_correlations.csv"),
                        index=False)
+
+    # ── A2: feature × accuracy (continuous) ───────────────────────────────────
+    print("\n[A2] feature × accuracy Spearman correlations (continuous outcome)")
+    acc_feats = avail_chunk + avail_timing
+    acc_corr = _accuracy_correlations(merged, acc_feats)
+    print(acc_corr.round(3).to_string(index=False))
+    acc_corr.to_csv(os.path.join(args.prior_dir,
+                                 "chunking_accuracy_correlations.csv"),
+                    index=False)
 
     # ── B: top-solver comparisons ─────────────────────────────────────────────
     print("\n[B] chunk features: top-solver vs rest (Mann-Whitney U + Cliff's δ)")

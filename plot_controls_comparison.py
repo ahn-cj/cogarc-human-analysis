@@ -1,14 +1,17 @@
 """
-Figure: Cliff's δ for top-solver vs rest, uncontrolled vs after regression
-controls for task difficulty and trajectory length.
+Figure: Spearman ρ of each measure with accuracy, uncontrolled vs after
+regression controls for task difficulty, trajectory length, and (for pacing)
+n_examples / example-view-time.
+
+Continuous replacement for the earlier top-solver Cliff's δ version: accuracy
+is treated as a continuous variable, so the robustness check is whether each
+measure's rank correlation with accuracy survives residualising the feature on
+its confounds.
 
 Reads:
-    prior_analysis/chunking_top_solvers_stats.csv      (uncontrolled)
-    prior_analysis/controlled_top_solver_stats.csv     (after controls)
-
-Plots paired horizontal bars (one feature per row) so the visual contrast
-between the two conditions is immediate.  Significance markers are added
-next to each bar.
+    prior_analysis/controlled_accuracy_correlations.csv
+        (feature, rho_raw, ci_lo_raw, ci_hi_raw, p_raw,
+                  rho_ctrl, ci_lo_ctrl, ci_hi_ctrl, p_ctrl)
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 
 FEATURE_ORDER = [
@@ -34,7 +38,7 @@ FEATURE_ORDER = [
 
 FEATURE_LABELS = {
     "deliberation_time":     "deliberation time",
-    "mean_rt_between_edits": "inter-edit RT",
+    "mean_rt_between_edits": "inter-edit RT (edit pace)",
     "size":                  "chunk size",
     "n_cells":               "unique cells per chunk",
     "n_chunks_total":        "n chunks per trajectory",
@@ -46,11 +50,12 @@ FEATURE_LABELS = {
     "success_iou_best":      "success-IoU per chunk",
 }
 
-# Reliable features (split-half ρ > 0.2) get highlighted; pacing measures
-# are stable individual traits per §3.2 so they belong here too.
 RELIABLE = {"deliberation_time", "mean_rt_between_edits",
             "size", "n_cells", "n_chunks_total",
             "is_connected", "fill_ratio"}
+
+COLOR_RAW  = "#999999"
+COLOR_CTRL = "#2166ac"
 
 
 def _sig_marker(p: float) -> str:
@@ -69,103 +74,52 @@ def main():
                     default="prior_analysis/controls_comparison_figure.png")
     args = ap.parse_args()
 
-    raw_chunk = pd.read_csv(os.path.join(args.prior_dir,
-                                          "chunking_top_solvers_stats.csv"))
-    ctrl = pd.read_csv(os.path.join(args.prior_dir,
-                                     "controlled_top_solver_stats.csv"))
+    corr = pd.read_csv(os.path.join(args.prior_dir,
+                                    "controlled_accuracy_correlations.csv"))
+    idx = corr.set_index("feature")
 
-    # Compute raw Cliff's δ for pacing measures on the fly
-    merged = pd.read_csv(os.path.join(args.prior_dir,
-                                       "chunking_top_solvers_merged.csv"))
-    top_mask  = merged["top_solver"].astype(bool)
-    rest_mask = ~top_mask
-    raw_pacing_rows = []
-    pacing_pairs = [
-        ("deliberation_time",     "deliberation_time_median"),
-        ("mean_rt_between_edits", "mean_rt_median"),
-    ]
-    from scipy.stats import mannwhitneyu
-    for feat_key, col in pacing_pairs:
-        if col not in merged.columns:
-            continue
-        top  = merged.loc[top_mask, col].dropna().values
-        rest = merged.loc[rest_mask, col].dropna().values
-        if len(top) < 5 or len(rest) < 5:
-            continue
-        # Cliff's δ
-        gt = int(np.sum(np.subtract.outer(top, rest) > 0))
-        lt = int(np.sum(np.subtract.outer(top, rest) < 0))
-        delta = (gt - lt) / (len(top) * len(rest))
-        _, p = mannwhitneyu(top, rest, alternative="two-sided")
-        raw_pacing_rows.append({"feature": feat_key,
-                                 "cliffs_delta": float(delta),
-                                 "p_mannwhitney": float(p)})
-    raw = pd.concat([raw_chunk, pd.DataFrame(raw_pacing_rows)], ignore_index=True)
-
-    raw_idx  = raw.set_index("feature")
-    ctrl_idx = ctrl.set_index("feature")
-
-    feats = [f for f in FEATURE_ORDER if f in raw_idx.index and f in ctrl_idx.index]
+    feats = [f for f in FEATURE_ORDER if f in idx.index]
     y = np.arange(len(feats))
-    h = 0.36
+    off = 0.18
 
-    d_raw  = np.array([raw_idx.loc[f, "cliffs_delta"]  for f in feats])
-    p_raw  = np.array([raw_idx.loc[f, "p_mannwhitney"] for f in feats])
-    d_ctrl = np.array([ctrl_idx.loc[f, "cliffs_delta"]  for f in feats])
-    p_ctrl = np.array([ctrl_idx.loc[f, "p_mannwhitney"] for f in feats])
+    fig, ax = plt.subplots(figsize=(10.5, 6.5))
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    for cond, ys, color, lo_c, hi_c, rho_c, p_c, lbl in [
+        ("raw",  y - off, COLOR_RAW,  "ci_lo_raw",  "ci_hi_raw",  "rho_raw",  "p_raw",  "uncontrolled"),
+        ("ctrl", y + off, COLOR_CTRL, "ci_lo_ctrl", "ci_hi_ctrl", "rho_ctrl", "p_ctrl", "controlled (difficulty + log-trajectory + n_examples / view-time)"),
+    ]:
+        rho = np.array([idx.loc[f, rho_c] for f in feats])
+        lo  = np.array([idx.loc[f, lo_c]  for f in feats])
+        hi  = np.array([idx.loc[f, hi_c]  for f in feats])
+        p   = np.array([idx.loc[f, p_c]   for f in feats])
+        ax.errorbar(rho, ys, xerr=[rho - lo, hi - rho], fmt="o",
+                    color=color, ecolor=color, elinewidth=1.6, capsize=3,
+                    markersize=6, label=lbl, zorder=3)
+        for r, yy, hival, pv in zip(rho, ys, hi, p):
+            sig = _sig_marker(pv)
+            if sig:
+                ax.text(hival + 0.015, yy, sig, va="center", ha="left",
+                        fontsize=9, color=color, fontweight="bold")
 
-    bars_raw  = ax.barh(y - h/2, d_raw,  h,
-                        color="#999999", alpha=0.85,
-                        label="uncontrolled", zorder=3)
-    bars_ctrl = ax.barh(y + h/2, d_ctrl, h,
-                        color="#2166ac", alpha=0.85,
-                        label="controlled (difficulty + log trajectory length)",
-                        zorder=3)
-
-    # Annotate δ and significance at the end of each bar
-    x_pad = 0.012
-    for bar, d, p in zip(bars_raw, d_raw, p_raw):
-        sig = _sig_marker(p)
-        ax.text(d + (x_pad if d >= 0 else -x_pad), bar.get_y() + bar.get_height()/2,
-                f"{d:+.2f}{sig}",
-                ha="left" if d >= 0 else "right",
-                va="center", fontsize=8.5, color="#444444")
-    for bar, d, p in zip(bars_ctrl, d_ctrl, p_ctrl):
-        sig = _sig_marker(p)
-        ax.text(d + (x_pad if d >= 0 else -x_pad), bar.get_y() + bar.get_height()/2,
-                f"{d:+.2f}{sig}",
-                ha="left" if d >= 0 else "right",
-                va="center", fontsize=8.5, color="#1f4f7f", fontweight="bold")
+    ax.axvline(0, color="black", lw=0.7, zorder=2)
+    ax.axvspan(-0.10, 0.10, color="#f5f5f5", zorder=1, label="negligible (|ρ| < .10)")
 
     ax.set_yticks(y)
-    # Bold the reliable feature labels
-    labels = []
-    for f in feats:
-        lbl = FEATURE_LABELS.get(f, f)
-        if f in RELIABLE:
-            lbl = f"{lbl}"
-        labels.append(lbl)
-    ax.set_yticklabels(labels, fontsize=10)
+    ax.set_yticklabels([FEATURE_LABELS.get(f, f) for f in feats], fontsize=10)
     for tick, f in zip(ax.get_yticklabels(), feats):
         if f in RELIABLE:
             tick.set_fontweight("bold")
 
-    ax.axvline(0, color="black", lw=0.7, zorder=2)
-    ax.axvspan(-0.147, 0.147, color="#f5f5f5", zorder=1,
-               label="negligible (|δ| < .15)")
-
-    ax.set_xlabel("Cliff's δ  (top solvers vs rest)", fontsize=11)
-    ax.set_xlim(-0.55, 0.55)
-    ax.invert_yaxis()  # most-affected feature at top
+    ax.set_xlabel("Spearman ρ with accuracy  (95% bootstrap CI)", fontsize=11)
+    ax.set_xlim(-0.6, 0.6)
+    ax.invert_yaxis()
     ax.set_title(
-        "Top-solver pacing and chunking effects survive regression controls\n"
-        "(pacing: + n_examples covariate; deliberation_time: + example-view-time covariate)\n"
+        "Continuous accuracy correlations survive regression controls\n"
+        "(deliberation time and n-chunks effects emerge once their confounds are removed)\n"
         "(***p<.001  **p<.01  *p<.05)",
         loc="left", fontsize=11.5,
     )
-    ax.legend(loc="lower right", fontsize=9.5)
+    ax.legend(loc="lower right", fontsize=9)
     ax.grid(axis="x", alpha=0.25, zorder=0)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)

@@ -50,7 +50,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-from scipy.stats import rankdata, mannwhitneyu
+from scipy.stats import rankdata, mannwhitneyu, spearmanr
 
 
 # ── feature lists and covariate sets ─────────────────────────────────────────
@@ -94,6 +94,26 @@ def _cliffs_delta(x: np.ndarray, y: np.ndarray) -> float:
     gt = int(np.sum(np.subtract.outer(x, y) > 0))
     lt = int(np.sum(np.subtract.outer(x, y) < 0))
     return (gt - lt) / (len(x) * len(y))
+
+
+def _spearman_with_ci(x: np.ndarray, y: np.ndarray,
+                      n_boot: int = 5000, seed: int = 42) -> dict:
+    """Spearman rho with a percentile bootstrap 95% CI on rho."""
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    n = len(x)
+    if n < 10:
+        return dict(n=int(n), rho=float("nan"), p_value=float("nan"),
+                    ci_lo=float("nan"), ci_hi=float("nan"))
+    rho, p = spearmanr(x, y)
+    rng = np.random.default_rng(seed)
+    boot = np.empty(n_boot)
+    for i in range(n_boot):
+        idx = rng.integers(0, n, n)
+        boot[i], _ = spearmanr(x[idx], y[idx])
+    ci_lo, ci_hi = np.nanpercentile(boot, [2.5, 97.5])
+    return dict(n=int(n), rho=float(rho), p_value=float(p),
+                ci_lo=float(ci_lo), ci_hi=float(ci_hi))
 
 
 def _build_per_st_table(prior_dir: str, behavioral_csv: str) -> pd.DataFrame:
@@ -211,6 +231,45 @@ def _top_solver_comparison(profile: pd.DataFrame,
     return out, merged
 
 
+def _accuracy_correlations_before_after(per_st_resid: pd.DataFrame,
+                                        behavioral_csv: str) -> pd.DataFrame:
+    """Spearman ρ of accuracy vs each feature, raw vs residualized per subject.
+
+    Continuous counterpart to the top-solver Cliff's δ before/after controls:
+    aggregates both the raw feature and its residual per subject (same AGG_RULE),
+    then correlates each with continuous accuracy (bootstrap 95% CI).
+    """
+    raw_cols  = {f: AGG_RULE[f] for f in ALL_FEATURES
+                 if f in per_st_resid.columns}
+    ctrl_cols = {f"{f}_resid": AGG_RULE[f] for f in ALL_FEATURES
+                 if f"{f}_resid" in per_st_resid.columns}
+    raw_prof  = per_st_resid.groupby("subject").agg(raw_cols).reset_index()
+    ctrl_prof = per_st_resid.groupby("subject").agg(ctrl_cols).reset_index()
+    prof = raw_prof.merge(ctrl_prof, on="subject")
+
+    behav = pd.read_csv(behavioral_csv)
+    behav["correct"] = behav["final_outcome"].astype(str).str.lower() == "success"
+    subj = (behav.groupby("subject")
+                  .agg(n_tasks=("trial", "nunique"), accuracy=("correct", "mean"))
+                  .reset_index())
+    subj = subj[subj["n_tasks"] >= 40]
+    prof = prof.merge(subj[["subject", "accuracy"]], on="subject", how="inner")
+
+    y = prof["accuracy"].values
+    rows = []
+    for f in ALL_FEATURES:
+        if f not in prof.columns or f"{f}_resid" not in prof.columns:
+            continue
+        r = _spearman_with_ci(prof[f].values, y)
+        c = _spearman_with_ci(prof[f"{f}_resid"].values, y)
+        rows.append(dict(
+            feature=f, n=r["n"],
+            rho_raw=r["rho"],   ci_lo_raw=r["ci_lo"],   ci_hi_raw=r["ci_hi"],   p_raw=r["p_value"],
+            rho_ctrl=c["rho"],  ci_lo_ctrl=c["ci_lo"],  ci_hi_ctrl=c["ci_hi"],  p_ctrl=c["p_value"],
+        ))
+    return pd.DataFrame(rows)
+
+
 def _joint_rank_regression(merged: pd.DataFrame) -> pd.DataFrame:
     """rank(accuracy) ~ rank(controlled size) + rank(controlled RT)."""
     cols = ["size_resid", "mean_rt_between_edits_resid", "accuracy"]
@@ -276,7 +335,13 @@ def main():
                                  "controlled_subject_profile.csv"), index=False)
     print(f"\n[prof] {len(profile)} subjects in controlled profile")
 
-    print("\n[§3] top-solver comparison on CONTROLLED features")
+    print("\n[§3] continuous accuracy correlations: raw vs controlled features")
+    acc_corr = _accuracy_correlations_before_after(per_st_resid, args.behavioral_csv)
+    print(acc_corr.round(3).to_string(index=False))
+    acc_corr.to_csv(os.path.join(args.prior_dir,
+                                 "controlled_accuracy_correlations.csv"), index=False)
+
+    print("\n[§3] (secondary) top-solver comparison on CONTROLLED features")
     ts_stats, merged = _top_solver_comparison(profile, args.behavioral_csv)
     print(ts_stats.to_string(index=False))
     ts_stats.to_csv(os.path.join(args.prior_dir,
