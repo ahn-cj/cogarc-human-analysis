@@ -23,11 +23,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-CONDS = ["real", "null_rt", "null_cut"]
+CONDS = ["real", "null_len", "null_cut"]
 COND_LABELS = {"real": "real\npause-segmented",
+               "null_len": "null-Len\n(size-matched)",
                "null_rt": "null-RT\n(shuffle RTs)",
                "null_cut": "null-Cut\n(random cuts)"}
 COND_COLORS = {"real": "#b84a3d",
+               "null_len": "#e08c3a",
                "null_rt": "#8a7bc4",
                "null_cut": "#a6a6a6"}
 
@@ -158,24 +160,22 @@ def main():
                "E. Cross-subject ARI (chunk partitions)",
                "mean Adjusted Rand Index",
                yrange=(0.0, None),
-               conds=["real", "null_cut"])
+               conds=["real", "null_len", "null_cut"])
 
-    # Summary for suptitle
+    # Summary for suptitle — gaps are vs null_len (size-matched, harder test)
     summary = (df.groupby("condition").agg(
         homog=("color_homogeneity", "mean"),
         conn=("is_connected", "mean"),
         iou=("success_iou_best", "mean"),
     ))
     ari_means = ari_df.groupby("condition")["ari"].mean()
-    gap_conn = summary.loc["real", "conn"] - max(
-        summary.loc["null_rt", "conn"], summary.loc["null_cut", "conn"])
-    gap_iou = summary.loc["real", "iou"] - max(
-        summary.loc["null_rt", "iou"], summary.loc["null_cut", "iou"])
-    gap_ari = ari_means.loc["real"] - ari_means.loc["null_cut"]
+    gap_conn = summary.loc["real", "conn"] - summary.loc["null_len", "conn"]
+    gap_iou  = summary.loc["real", "iou"]  - summary.loc["null_len", "iou"]
+    gap_ari  = ari_means.loc["real"] - ari_means.loc["null_cut"]
 
     fig.suptitle(
         "Pause-segmented chunks are cognitive units: evidence from 75 tasks × Experiment 2  "
-        f"(Δconnectedness = +{gap_conn:.2f},  "
+        f"(Δconnectedness vs size-matched null = +{gap_conn:.2f},  "
         f"ΔSuccess-IoU = +{gap_iou:.3f},  "
         f"ΔARI = +{gap_ari:.2f})",
         fontsize=13, y=0.975,

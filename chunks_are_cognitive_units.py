@@ -74,7 +74,14 @@ def null_shuffled_rt(edits: List[Dict], rng: random.Random) -> List[Dict]:
 
 def null_random_cuts(edits: List[Dict], n_chunks: int,
                      rng: random.Random) -> List[List[Dict]]:
-    """Preserve chunk count but pick cut points uniformly at random."""
+    """Preserve chunk count but pick cut points uniformly at random.
+
+    NOTE: This preserves only the *number* of chunks, not the chunk-length
+    distribution.  Uniform cut points yield more even-sized segments than
+    real (right-skewed) human chunking, and because the coherence metrics are
+    size-dependent this leaves a size confound.  Use null_length_permuted for
+    the stronger, size-matched test.
+    """
     n = len(edits)
     if n == 0 or n_chunks <= 1:
         return [edits] if edits else []
@@ -85,6 +92,28 @@ def null_random_cuts(edits: List[Dict], n_chunks: int,
         if c > prev:
             out.append(edits[prev:c])
         prev = c
+    return out
+
+
+def null_length_permuted(edits: List[Dict], real_chunks: List[List[Dict]],
+                         rng: random.Random) -> List[List[Dict]]:
+    """Preserve the exact chunk-LENGTH multiset; randomize boundary placement.
+
+    Take the real chunk lengths, permute their order, then re-segment the
+    temporally-ordered edit stream using those lengths.  This holds the chunk
+    size distribution fixed (eliminating the size confound) and tests only
+    whether *where* the boundaries fall carries the coherence signal.
+    """
+    lengths = [len(ch) for ch in real_chunks if ch]
+    if not lengths:
+        return []
+    rng.shuffle(lengths)
+    out, prev = [], 0
+    for L in lengths:
+        out.append(edits[prev:prev + L])
+        prev += L
+    if prev < len(edits):  # safety: should not trigger (lengths sum to n)
+        out.append(edits[prev:])
     return out
 
 
@@ -151,14 +180,18 @@ def process_trajectory(task_id: str, subj: str, edits: List[Dict],
     null_rt_metrics = _collect_chunk_metrics(null_rt, comp_masks)
     null_cut = null_random_cuts(edits, n_chunks=len(real), rng=rng)
     null_cut_metrics = _collect_chunk_metrics(null_cut, comp_masks)
+    null_len = null_length_permuted(edits, real, rng)
+    null_len_metrics = _collect_chunk_metrics(null_len, comp_masks)
 
     return {
         "rts_tagged": rts_tagged,
         "real": real_metrics,
         "null_rt": null_rt_metrics,
         "null_cut": null_cut_metrics,
+        "null_len": null_len_metrics,
         "partition_real": _cells_to_chunk_partition(real),
         "partition_null_cut": _cells_to_chunk_partition(null_cut),
+        "partition_null_len": _cells_to_chunk_partition(null_len),
         "n_chunks_real": len(real),
         "n_chunks_null_rt": len(null_rt),
     }
@@ -223,6 +256,7 @@ def main():
 
         task_partitions_real = []
         task_partitions_null = []
+        task_partitions_null_len = []
         for fname in sorted(os.listdir(traj_dir)):
             if not fname.startswith("subj_"):
                 continue
@@ -237,21 +271,25 @@ def main():
                 continue
 
             all_rts_tagged.extend(result["rts_tagged"])
-            for cond in ("real", "null_rt", "null_cut"):
+            for cond in ("real", "null_rt", "null_cut", "null_len"):
                 for r in result[cond]:
                     r2 = dict(r)
                     r2.update({"task_id": tid, "subject_id": subj, "condition": cond})
                     chunk_rows.append(r2)
             task_partitions_real.append(result["partition_real"])
             task_partitions_null.append(result["partition_null_cut"])
+            task_partitions_null_len.append(result["partition_null_len"])
 
         # Cross-subject ARI for this task
-        ari_real = _task_ari(task_partitions_real, rng, n_pairs=50)
-        ari_null = _task_ari(task_partitions_null, rng, n_pairs=50)
+        ari_real     = _task_ari(task_partitions_real,     rng, n_pairs=50)
+        ari_null     = _task_ari(task_partitions_null,     rng, n_pairs=50)
+        ari_null_len = _task_ari(task_partitions_null_len, rng, n_pairs=50)
         for a in ari_real:
             ari_rows.append({"task_id": tid, "condition": "real", "ari": a})
         for a in ari_null:
             ari_rows.append({"task_id": tid, "condition": "null_cut", "ari": a})
+        for a in ari_null_len:
+            ari_rows.append({"task_id": tid, "condition": "null_len", "ari": a})
 
         if i % 10 == 0 or i == len(task_ids):
             print(f"  [{i:3d}/{len(task_ids)}] tasks processed, "
