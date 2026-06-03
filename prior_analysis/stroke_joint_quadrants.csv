@@ -1,0 +1,5 @@
+granularity,pace,n,mean_accuracy
+coarse,fast,49,0.8065310303590413
+coarse,slow,49,0.8041803381514744
+fine,fast,49,0.7968241864221387
+fine,slow,48,0.762902048153132
