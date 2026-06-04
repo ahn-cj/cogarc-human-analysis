@@ -120,19 +120,16 @@ def main():
     axA.legend(fontsize=9, loc="upper right")
     axA.grid(alpha=0.25)
 
-    # ── Panel B: per-subject exp β vs accuracy, coloured by top solver ────────
+    # ── Panel B: per-subject exp β vs continuous accuracy ────────────────────
     axC = fig.add_subplot(gs[0, 1])
-    rest_mask = ~rt_sub["top_solver"].astype(bool)
-    top_mask  =  rt_sub["top_solver"].astype(bool)
+    axC.scatter(rt_sub["accuracy"], rt_sub["exp_b"],
+                s=42, alpha=0.7, color="#2166ac",
+                edgecolors="white", linewidths=0.4)
 
-    axC.scatter(rt_sub.loc[rest_mask, "accuracy"],
-                rt_sub.loc[rest_mask, "exp_b"],
-                s=35, alpha=0.55, color=COLOR_REST,
-                edgecolors="white", linewidths=0.4, label=f"rest (n={int(rest_mask.sum())})")
-    axC.scatter(rt_sub.loc[top_mask, "accuracy"],
-                rt_sub.loc[top_mask, "exp_b"],
-                s=70, alpha=0.85, color=COLOR_TOP, marker="o",
-                edgecolors="white", linewidths=0.6, label=f"top (n={int(top_mask.sum())})")
+    # LOWESS trend
+    from statsmodels.nonparametric.smoothers_lowess import lowess
+    lo = lowess(rt_sub["exp_b"], rt_sub["accuracy"], frac=0.7, return_sorted=True)
+    axC.plot(lo[:, 0], lo[:, 1], color="#b2182b", lw=2)
 
     axC.axhline(0, color="black", lw=0.6, ls="--", alpha=0.4)
     rho, p = spearmanr(rt_sub["accuracy"], rt_sub["exp_b"])
@@ -143,11 +140,10 @@ def main():
              fontsize=10, color="#333333",
              bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cccccc", alpha=0.9))
 
-    axC.set_xlabel("Overall accuracy", fontsize=10)
+    axC.set_xlabel("Overall accuracy (continuous)", fontsize=10)
     axC.set_ylabel("Per-subject exponential β\n(more negative = faster speedup)", fontsize=10)
-    axC.set_title("B. Top solvers have flatter learning curves\n(consistent with Ackerman 1988)",
+    axC.set_title("B. Flatter learning curves go with higher accuracy\n(Ackerman 1988)",
                   loc="left", fontsize=11.5, fontweight="bold")
-    axC.legend(fontsize=9, loc="upper right")
     axC.grid(alpha=0.25)
 
     fig.suptitle(
