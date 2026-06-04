@@ -113,7 +113,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", default="d9f24cd1")
     ap.add_argument("--lumper", default="j2dvablb")
-    ap.add_argument("--splitter", default="c2lwacqc")
+    ap.add_argument("--splitter", default="a6jpzpek")
     ap.add_argument("--out", default="prior_analysis/concept_strokes_figure.png")
     args = ap.parse_args()
 
