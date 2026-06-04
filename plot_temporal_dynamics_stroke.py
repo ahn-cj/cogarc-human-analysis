@@ -34,7 +34,7 @@ def main():
     args = ap.parse_args()
     el = pd.read_csv(f"{args.prior_dir}/temporal_dynamics_stroke_early_late.csv")
     stab = pd.read_csv(f"{args.prior_dir}/temporal_dynamics_stroke_stability.csv").set_index("outcome")
-    quart = pd.read_csv(f"{args.prior_dir}/temporal_dynamics_stroke_quartiles.csv")
+    qc = pd.read_csv(f"{args.prior_dir}/temporal_dynamics_stroke_quartile_corr.csv")
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 9.5),
                              gridspec_kw=dict(hspace=0.42, wspace=0.32, left=0.07,
@@ -62,25 +62,33 @@ def main():
              fontsize=12.5, fontweight="bold")
 
     for ax, (col, title, unit) in zip(axes[1], MEASURES):
-        sub = quart[quart["outcome"] == col]
+        sub = qc[qc["outcome"] == col].set_index("quartile").reindex(QORDER)
         x = np.arange(len(QORDER))
-        for grp, color, marker in [("top", COLOR_TOP, "o"), ("rest", COLOR_REST, "s")]:
-            gs = sub[sub["group"] == grp].set_index("quartile").reindex(QORDER)
-            nsub = int(gs["n_subjects"].dropna().iloc[0])
-            ax.errorbar(x, gs["mean"], yerr=gs["se"], color=color, marker=marker,
-                        lw=2, ms=7, capsize=4, label=f"{grp} (n={nsub})", alpha=0.9)
+        rho = sub["rho_with_accuracy"].values
+        lo = rho - sub["ci_lo"].values
+        hi = sub["ci_hi"].values - rho
+        sig = sub["p"].values < 0.05
+        ax.errorbar(x, rho, yerr=[lo, hi], color="#2166ac", marker="o", lw=2, ms=7,
+                    capsize=4, alpha=0.9)
+        for xi, r, s in zip(x, rho, sig):
+            if s:
+                ax.scatter([xi], [r], s=120, facecolors="none", edgecolors="#b2182b",
+                           linewidths=1.6, zorder=5)
+        ax.axhline(0, color="black", lw=0.7)
+        ax.axhspan(-0.10, 0.10, color="#f5f5f5", zorder=0)
         ax.set_xticks(x); ax.set_xticklabels(QLAB, fontsize=9)
         ax.set_xlabel("Trial-order quartile", fontsize=10)
-        ax.set_ylabel(f"{title} ({unit})", fontsize=10)
+        ax.set_ylabel("Spearman ρ with accuracy", fontsize=10)
+        ax.set_ylim(-0.55, 0.45)
         ax.set_title(title, loc="left", fontsize=11.5, fontweight="bold")
-        ax.grid(alpha=0.2); ax.legend(fontsize=9, loc="best")
-    fig.text(0.025, 0.49, "B. Quartile trajectories  (top solvers vs rest; "
-             "the granularity advantage is present from Q1)",
+        ax.grid(alpha=0.2)
+    fig.text(0.025, 0.49, "B. Per-quartile correlation with continuous accuracy  "
+             "(red ring = p<.05; granularity predicts accuracy from Q1, pacing does not)",
              fontsize=12.5, fontweight="bold")
 
     fig.suptitle("Within-experiment temporal dynamics: granularity and pacing both "
-                 "improve with practice,\nbut the top-solver granularity advantage is "
-                 "present from the first quartile  (n = 189, 33 top solvers)",
+                 "improve with practice, but the\ngranularity-accuracy relationship is "
+                 "present from the first quartile  (n = 189)",
                  fontsize=12.5, y=0.975)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     fig.savefig(args.out, dpi=150, bbox_inches="tight")
