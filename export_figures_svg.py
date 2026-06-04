@@ -45,7 +45,7 @@ SCRIPTS = [
     "plot_stroke_chapter_figures.py",   # fig3b, fig5, fig6
     "plot_drag_sensitivity.py",         # fig10
     "plot_temporal_pacing.py",          # fig2
-    "plot_temporal_dynamics.py",        # fig7
+    "plot_temporal_dynamics_stroke.py", # fig7 (stroke measures)
     "plot_practice_curves.py",          # fig8
     "plot_chunk_threshold_robustness.py",  # fig9 (bonus; retained-for-reference)
 ]
