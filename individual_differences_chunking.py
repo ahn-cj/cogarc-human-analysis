@@ -1,4 +1,12 @@
 """
+DEPRECATED / SUPERSEDED. This defines a chunk by RT pauses (see
+human_chunking.identify_chunks) and is NOT the definition used in the
+dissertation's Chapter 4. The canonical analysis defines a chunk as a
+drag STROKE (click + cells dragged while the button is held) and lives in
+stroke_chunking.py (reliability, ICC, accuracy), temporal_dynamics_stroke.py,
+and section4_joint_analyses.py. Retained only for the drag-contamination
+sensitivity comparison (old RT-chunk split-half rho ~= .51 vs stroke .76).
+
 Individual differences in chunking behavior.
 
 Two questions:

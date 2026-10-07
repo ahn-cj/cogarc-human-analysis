@@ -17,9 +17,11 @@ import argparse
 import os
 import numpy as np
 import pandas as pd
+import matplotlib
+import matplotlib.ticker
+matplotlib.rcParams['svg.fonttype']='none'
 import matplotlib.pyplot as plt
 from scipy.stats import spearmanr
-from statsmodels.nonparametric.smoothers_lowess import lowess
 
 TRIAL_SCORES = ("/Users/carolineahn/Documents/GitHub/CogARC-dataRepository/"
                 "Behavioral data/trial_scores.csv")
@@ -54,10 +56,26 @@ def controlled_rho(per_st, feat, acc):
     return sp_ci(prof["_r"].values, prof["accuracy"].values)
 
 
-def scatter(ax, x, y, xlabel, title, rho_ci, color="#2166ac"):
+LOG_AXIS = bool(int(os.environ.get('LOG_AXIS','0')))
+
+
+def scatter(ax, x, y, xlabel, title, rho_ci, color="#2166ac", logfit=False):
+    """logfit=True fits the trend on log(x). Chunk size is right-skewed, so a fit on
+    raw units is pulled by a few extreme-x points and understates the (rank-based)
+    Spearman rho that is reported; fitting on log(x) tracks it much more closely."""
     ax.scatter(x, y, s=16, alpha=0.45, color=color, edgecolors="none")
-    lo = lowess(y, x, frac=0.7, return_sorted=True)
-    ax.plot(lo[:, 0], lo[:, 1], color="#b2182b", lw=2.2)
+    if logfit:
+        z = np.polyfit(np.log(x), y, 1)
+        xs = np.linspace(np.min(x), np.max(x), 200)
+        ax.plot(xs, np.polyval(z, np.log(xs)), color="#b2182b", lw=2.4)
+        if LOG_AXIS:
+            ax.set_xscale("log")
+            ax.set_xticks([1, 2, 3, 4, 6, 8, 10])
+            ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+    else:
+        z = np.polyfit(x, y, 1)
+        xs = np.linspace(np.min(x), np.max(x), 100)
+        ax.plot(xs, np.polyval(z, xs), color="#b2182b", lw=2.4)
     rho, clo, chi, p = rho_ci
     star = "***" if p < .001 else "**" if p < .01 else "*" if p < .05 else ""
     ax.text(0.04, 0.96, f"ρ = {rho:+.2f} [{clo:+.2f}, {chi:+.2f}]{star}",
@@ -89,7 +107,7 @@ def main():
                            gridspec_kw=dict(wspace=0.30, left=0.06, right=0.97,
                                             top=0.84, bottom=0.14))
     scatter(ax[0], prof["cells_per_stroke"], prof["accuracy"],
-            "cells per stroke (coarser →)", "A. Coarser chunking → higher accuracy", cps)
+            "cells per stroke (coarser →)", "A. Coarser chunking → higher accuracy", cps, logfit=True)
     scatter(ax[1], prof["n_strokes"], prof["accuracy"],
             "n strokes per trajectory (finer →)", "B. More strokes → lower accuracy", nst,
             color="#4393c3")
@@ -112,7 +130,7 @@ def main():
     ax[2].set_ylabel("Spearman ρ with accuracy", fontsize=10)
     ax[2].set_ylim(-0.45, 0.35)
     ax[2].set_title("C. The effect survives controls", loc="left", fontsize=11.5, fontweight="bold")
-    ax[2].legend(fontsize=8.5, loc="lower right")
+    ax[2].legend(fontsize=8.5, loc="upper right", framealpha=0.95)
     ax[2].spines[["top", "right"]].set_visible(False)
 
     fig.suptitle("Chunk granularity predicts accuracy (continuous, n = 195) and survives "

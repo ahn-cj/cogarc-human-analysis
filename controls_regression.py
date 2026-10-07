@@ -60,7 +60,8 @@ CHUNK_LEVEL_FEATURES = [
     "color_homogeneity", "bbox_area", "nn_chain_rate", "success_iou_best",
 ]
 TRAJ_LEVEL_FEATURES  = ["n_chunks_total"]
-PACING_FEATURES      = ["mean_rt_between_edits", "deliberation_time"]
+PACING_FEATURES      = ["mean_rt_between_edits", "deliberation_time", "planning_time",
+                        "example_view_time_before_first_edit", "rt_click"]
 
 CHUNKING_FEATURES = CHUNK_LEVEL_FEATURES + TRAJ_LEVEL_FEATURES
 ALL_FEATURES      = CHUNKING_FEATURES + PACING_FEATURES
@@ -71,6 +72,9 @@ COVARIATE_SETS: Dict[str, List[str]] = {
     f: COMMON_COVARIATES.copy() for f in CHUNKING_FEATURES
 }
 COVARIATE_SETS["mean_rt_between_edits"] = COMMON_COVARIATES + ["n_examples"]
+COVARIATE_SETS["planning_time"]         = COMMON_COVARIATES + ["n_examples"]
+COVARIATE_SETS["example_view_time_before_first_edit"] = COMMON_COVARIATES + ["n_examples"]
+COVARIATE_SETS["rt_click"]              = COMMON_COVARIATES + ["n_examples"]
 COVARIATE_SETS["deliberation_time"]     = (
     COMMON_COVARIATES + ["n_examples", "example_view_time_before_first_edit"]
 )
@@ -154,7 +158,17 @@ def _build_per_st_table(prior_dir: str, behavioral_csv: str) -> pd.DataFrame:
                            on="task_id", how="left")
 
     # Derived covariate
+    # drag-free inter-click RT (the chapter's "drawing pace"), cached per trial
+    _rtc = os.path.join(prior_dir, "rt_click_per_trial.csv")
+    if os.path.exists(_rtc):
+        rtc = (pd.read_csv(_rtc, dtype={"subject": str, "trial": str})
+                 .rename(columns={"trial": "task_id"}))
+        per_st = per_st.merge(rtc[["subject", "task_id", "rt_click"]],
+                              on=["subject", "task_id"], how="left")
     per_st["log_traj_len"] = np.log(per_st["trajectory_length"].clip(lower=1))
+    # edit-view planning = deliberation minus time spent studying the examples
+    per_st["planning_time"] = (per_st["deliberation_time"]
+                               - per_st["example_view_time_before_first_edit"])
     return per_st
 
 
