@@ -144,7 +144,7 @@ rates = {}
 for _, r in rate.iterrows():
     rates.setdefault(r.keyword, dict(keyword=r.keyword, human=round(r.human, 1)))
     rates[r.keyword][r.agent] = round(r.pct, 1)
-rates = sorted(rates.values(), key=lambda x: -x["human"])
+rates = sorted(rates.values(), key=lambda x: (-x["human"], x["keyword"]))
 for a in agents:
     a["gap"] = round(sum(abs(r[a["name"]] - r["human"]) for r in rates) / len(rates), 1)
     a["n_reports"] = int(q(f"""MATCH (:Agent {{name:'{a['name']}'}})-[:AUTHORED]->(x:AgentReport)
@@ -338,7 +338,7 @@ for p_ in puzzles:
         for kw, n in g["kw"].items():
             if n >= 3 and ("K", kw) in EX_IDX:
                 _e(EX_IDX[("K", kw)], EX_IDX[("A", g["id"])], "USERS_DREW", n)
-    for kw, n in sorted(p_["profile"].items(), key=lambda x: -x[1])[:5]:
+    for kw, n in sorted(p_["profile"].items(), key=lambda x: (-x[1], x[0]))[:5]:
         _e(EX_IDX[("P", p_["idx"])], EX_IDX[("K", kw)], "PROFILE", n)
 for c in B["communities"]:
     for m in c["members"]:
@@ -353,13 +353,20 @@ for a in agents:
 for (an_, kw), n in picked.items():
     _e(EX_IDX[("M", an_)], EX_IDX[("K", kw)], "PICKED", n)
 
+# Edges are appended in whatever order the queries return rows, which Kuzu does
+# not guarantee. Sorting makes a rebuild byte-identical, so graph.json only
+# changes in git when the data actually changes.
+EX_E.sort(key=lambda e: (e[2], e[0], e[1]))
 B["explorer"] = dict(nodes=EX_N, edges=EX_E, rels=EX_REL)
 
 B["cypher"] = {f: open(os.path.join(HERE, "..", "queries", f)).read()
                for f in ("01_keyword_to_answer.cypher", "02_keyword_error_lift.cypher")}
 
 path = os.path.join(OUT, "graph.json")
-json.dump(B, open(path, "w"), separators=(",", ":"))
+# sort_keys so a rebuild is byte-identical: several of these dicts are built
+# from Kuzu rows, whose order is not guaranteed between runs. The site reads
+# every one of them by key or sorts it itself, so the order here is free.
+json.dump(B, open(path, "w"), separators=(",", ":"), sort_keys=True)
 print(f"wrote {os.path.normpath(path)}  ({os.path.getsize(path)/1024:.0f} KB)")
 print(f"  {len(puzzles)} puzzles, {sum(len(p['groups']) for p in puzzles)} answer grids, "
       f"{len(cases)} case studies")
